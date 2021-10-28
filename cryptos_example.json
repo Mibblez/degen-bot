@@ -1,0 +1,10 @@
+{
+    "SHIB": {
+        "INFO" : {
+            "contract_id": "0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce",
+            "chain": "ETH ERC-20",
+            "website": "https://shibatoken.com/"
+        },
+        "cmc_id": "5994"
+    }
+}
