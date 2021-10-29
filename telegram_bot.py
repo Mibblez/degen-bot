@@ -6,6 +6,7 @@ import json
 import random
 import time
 import re
+import sqlite3
 
 from requests import Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
@@ -49,6 +50,7 @@ def unknown_coin(message, invalid_coin_str):
                      f"Unknown coin: {invalid_coin_str}\n\nKnown coins: {' ; '.join([x for x in cryptos_json.keys()])}")
 
 
+# TODO: add has_dextools in each json entry. show dextools url if has_dextools is set to true
 @bot.message_handler(commands=['info'])
 def info(message):
     request = message.text.split()[1] if len(message.text.split()) == 2 else ''
@@ -136,6 +138,111 @@ def wen(message):
         bot.reply_to(message, aston_models[random.randrange(len(aston_models))])
 
 
+def initialize_db():
+    connection = sqlite3.connect('notifications.db')
+    cursor = connection.cursor()
+
+    command1 = 'CREATE TABLE IF NOT EXISTS ' +\
+               'users(user_id INTEGER PRIMARY KEY, name TEXT)'
+
+    command2 = 'CREATE TABLE IF NOT EXISTS ' +\
+               'price_notifications(' +\
+               'notification_id INTEGER PRIMARY KEY AUTOINCREMENT, coin TEXT, user_id INTEGER, ' +\
+               'notify_at FLOAT, direction CHAR,' +\
+               'FOREIGN KEY(user_id) REFERENCES users(user_id))'
+
+    cursor.execute(command1)
+    cursor.execute(command2)
+
+    connection.commit()
+    connection.close()
+
+
+@bot.message_handler(commands=['price_notify'])
+def notify(message):
+    request = message.text.split()[1:3] if len(message.text.split()) == 3 else ''
+
+    if request == '':
+        # Too many or too few args
+        usage_error(message, '/price_notify COIN_NAME PRICE_TARGET')
+        return
+
+    coin = request[0].upper()
+    if coin not in cryptos_json:
+        # Given a coin name thats not in the JSON file
+        unknown_coin(message, request)
+        return
+
+    # Make sure price_target arg can be converted to a float
+    price_target = 0.0
+    try:
+        price_target = float(request[1].strip('$'))
+    except ValueError:
+        usage_error(message, '/price_notify COIN_NAME PRICE_TARGET\n'
+                    'Ensure that PRICE_TARGET is a number')
+        return
+
+    coin_id = cryptos_json[coin]["cmc_id"]
+    coin_data = get_latest_price(request, coin_id)
+
+    if coin_data is None:
+        bot.send_message(message.chat.id, "Could not get the latest price. Try again later.")
+        return
+
+    latest_price = float("{:.10f}".format(
+        coin_data['data'][coin_id]['quote']['USD']['price']))
+
+    desired_price_movement = '+' if latest_price < price_target else '-'
+
+    user_id = message.from_user.id
+
+    connection = sqlite3.connect('notifications.db')
+    cursor = connection.cursor()
+
+    # Create new user in user db if not already present
+    cursor.execute(f"SELECT user_id FROM users WHERE user_id={user_id}")
+    if cursor.fetchone() is None:
+        cursor.execute('INSERT INTO users VALUES '
+                       f"({user_id}, '{message.from_user.first_name} {message.from_user.last_name}')")
+
+    # See if user already has a notification for this coin. Overwrite the old notification if so
+    cursor.execute(f"SELECT notification_id from price_notifications WHERE user_id={user_id} AND coin='{coin}'")
+    price_notification_id = 'NULL'
+    if (fetch := cursor.fetchone()) is not None:
+        price_notification_id = fetch[0]
+
+    cursor.execute('REPLACE INTO price_notifications VALUES '
+                   f"({price_notification_id}, '{coin}', {user_id}, {price_target}, '{desired_price_movement}')")
+
+    connection.commit()
+    connection.close()
+
+    bot.reply_to(message, f"Created notification for {coin} at ${price_target}")
+
+
+@bot.message_handler(commands=['check_notifications'])
+def check_notifications(message):
+    connection = sqlite3.connect('notifications.db')
+    cursor = connection.cursor()
+
+    cursor.execute(f"SELECT coin, notify_at FROM price_notifications WHERE user_id={message.from_user.id}")
+    result = cursor.fetchall()
+
+    if result == []:
+        # No notifications are set
+        bot.reply_to(message, "No notifications set")
+        connection.close()
+        return
+
+    response = ""
+
+    for coin, notify_at in result:
+        response += f"{coin} at ${notify_at}\n"
+
+    bot.reply_to(message, response)
+    connection.close()
+
+
 @bot.message_handler(commands=['price'])
 def price(message):
     request = message.text.split()[1] if len(message.text.split()) == 2 else ''
@@ -169,6 +276,7 @@ def price(message):
                      f"{movement_direction} {percent_change_24h}% (24H)")
 
 
+# TODO: rename func and remove coin_name
 def get_latest_price(coin_name, coin_id):
     url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest'
     headers = {
@@ -289,6 +397,58 @@ def message_polling():
         time.sleep(1)
 
 
+def check_price_notifications():
+    while True:
+        connection = sqlite3.connect('notifications.db')
+        cursor = connection.cursor()
+
+        # Get a list of coins that have notifications set
+        cursor.execute("SELECT DISTINCT coin FROM price_notifications")
+        coin_names = [item for t in cursor.fetchall() for item in t]
+
+        # Only check notifications if someone has a notification set
+        if coin_names is None:
+            connection.close()
+            time.sleep(360)
+            continue
+
+        coin_ids = list(map(lambda coin_name: cryptos_json[coin_name]["cmc_id"], coin_names))
+
+        # Convert coin_ids list to a string so it can be passed to the CMC api
+        coin_string = ",".join(coin_ids)
+
+        coin_data = get_latest_price("", coin_string)
+
+        for coin_id, coin_name in zip(coin_ids, coin_names):
+            current_price = float("{:.10f}".format(coin_data['data'][coin_id]['quote']['USD']['price']))
+
+            cursor.execute("SELECT notification_id, user_id, notify_at, direction FROM price_notifications "
+                           f"WHERE coin='{coin_name}'")
+
+            result = cursor.fetchall()
+
+            # Check if the price for each coin is high or low enough to trigger a notification
+            # If so, DM the user and remove the notification entry from the database
+            for notification_id, user_id, notification_price, direction in result:
+                if direction == '+' and current_price > notification_price:
+                    bot.send_message(user_id, 'HEY FELLOW APE!\n'
+                                     f'{coin_name} has risen above {notification_price} and is at {current_price}.')
+                    cursor.execute(f"DELETE FROM price_notifications WHERE notification_id={notification_id}")
+                elif direction == '-' and current_price < notification_price:
+                    bot.send_message(user_id, 'HEY GAY BEAR!\n'
+                                     f'{coin_name} has fallen below {notification_price} and is at {current_price}.')
+                    cursor.execute(f"DELETE FROM price_notifications WHERE notification_id={notification_id}")
+
+        connection.commit()
+        connection.close()
+        time.sleep(360)
+
+
+initialize_db()
+
 # Workaround to stop the bot from failing when HTTP timeout happens but still allow CTRL-C to close it
 telegram_polling_thread = Thread(target=message_polling)
 telegram_polling_thread.start()
+
+price_checker_thread = Thread(target=check_price_notifications)
+price_checker_thread.start()
