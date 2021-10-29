@@ -1,4 +1,5 @@
 import os
+import sys
 from dotenv import load_dotenv
 import telebot
 import json
@@ -6,7 +7,6 @@ import random
 import time
 import re
 
-import datetime
 from requests import Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
 import pprint as pp
@@ -18,10 +18,21 @@ TELEGRAM_API_KEY = os.getenv('TELEGRAM_API_KEY')
 CMC_API_KEY = os.getenv('COINMARKETCAP_API_KEY')
 ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY')
 
-bot = telebot.TeleBot(TELEGRAM_API_KEY)
+if None in [TELEGRAM_API_KEY, CMC_API_KEY, ETHERSCAN_API_KEY]:
+    print('ERROR: Missing API key(s)\n'
+          'API keys for the following APIs must be present in the .env file: '
+          'TELEGRAM, Coinmarketcap, Etherscan\n'
+          'These API keys must be named TELEGRAM_API_KEY, COINMARKETCAP_API_KEY and ETHERSCAN_API_KEY')
+    sys.exit()
+
+if not os.path.exists('cryptos.json'):
+    print('ERROR: cryptos.json not found\n'
+          'Create a cryptos.json according to the template named cryptos_example.json')
 
 json_file = open('cryptos.json')
 cryptos_json = json.load(json_file)
+
+bot = telebot.TeleBot(TELEGRAM_API_KEY)
 
 
 @bot.message_handler(commands=['coins'])
@@ -183,9 +194,7 @@ def get_latest_price(coin_name, coin_id):
         return None
 
 
-# TODO: implement me https://etherscan.io/apidocs https://etherscan.io/apidocs#gastracker
-# Show in USD https://etherscan.io/apidocs#stats
-# Different things with cubcommands(normal transaction, uniswap, erc20, etc)
+# TODO:  Different gas amounts with subcommands(normal transaction, uniswap, erc20, etc)
 @bot.message_handler(commands=['ethgas'])
 def ethgas(message):
     gas_url = 'https://api.etherscan.io/api'
@@ -232,15 +241,18 @@ def ethgas(message):
 
 
 @bot.message_handler(commands=['list_commands', 'lc'])
-def list_commands_in_file(message):
+def list_commands_in_file(message, dir='misc_commands'):
+    if not os.path.exists(dir):
+        return
+
     request = message.text.split()[1] if len(message.text.split()) == 2 else ''
 
     # Given a command file that does not exist or too many or too few args
-    if (request + '.py') not in os.listdir('misc_commands') or request == '':
+    if (request + '.py') not in os.listdir(dir) or request == '':
         response = 'Usage: /list_commands COMMANDS_FILE\nKnown command files: '
 
         # Iterate over directories containing command files and strip the file extension from them
-        python_files = list(filter(lambda file: file.endswith('.py'), os.listdir('misc_commands')))
+        python_files = list(filter(lambda file: file.endswith('.py'), os.listdir(dir)))
         python_files = [os.path.splitext(x)[0] for x in python_files]
 
         response += ' | '.join(python_files)
@@ -248,7 +260,7 @@ def list_commands_in_file(message):
 
         return
 
-    with open(f'misc_commands/{request}.py', 'r') as f:
+    with open(f'{dir}/{request}.py', 'r') as f:
         commands = ""
 
         # Iterate over every bot command line
@@ -259,9 +271,10 @@ def list_commands_in_file(message):
     bot.send_message(message.chat.id, f"Known commands in {request}:\n{commands}")
 
 
-# Load bot commands from each python file in misc_commands directory
-for command_file in filter(lambda file: file.endswith('.py'), os.listdir('misc_commands')):
-    exec(open(f"misc_commands/{command_file}").read())
+if os.path.exists('misc_commands'):
+    # Load bot commands from each python file in misc_commands directory
+    for command_file in filter(lambda file: file.endswith('.py'), os.listdir('misc_commands')):
+        exec(open(f"misc_commands/{command_file}").read())
 
 
 def message_polling():
@@ -276,6 +289,6 @@ def message_polling():
         time.sleep(1)
 
 
-# Workaround to stop the bot from failing when HTTP timeout happens bit still allow for CTRL-C to close it
+# Workaround to stop the bot from failing when HTTP timeout happens but still allow CTRL-C to close it
 telegram_polling_thread = Thread(target=message_polling)
 telegram_polling_thread.start()
