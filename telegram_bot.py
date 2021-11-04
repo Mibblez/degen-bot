@@ -158,6 +158,25 @@ def initialize_db():
     connection.close()
 
 
+@bot.message_handler(commands=['start'])
+def start_bot(message):
+    user_id = message.from_user.id
+
+    connection = sqlite3.connect('notifications.db')
+    cursor = connection.cursor()
+
+    # Create new user in user db if not already present
+    cursor.execute(f"SELECT user_id FROM users WHERE user_id={user_id}")
+    if cursor.fetchone() is None:
+        cursor.execute('INSERT INTO users VALUES '
+                       f"({user_id}, '{message.from_user.first_name} {message.from_user.last_name}')")
+
+    connection.commit()
+    connection.close()
+
+    bot.reply_to(message, "Henlo")
+
+
 @bot.message_handler(commands=['price_notify'])
 def notify(message):
     request = message.text.split()[1:3] if len(message.text.split()) == 3 else ''
@@ -182,8 +201,19 @@ def notify(message):
                     'Ensure that PRICE_TARGET is a number')
         return
 
+    user_id = message.from_user.id
+
+    connection = sqlite3.connect('notifications.db')
+    cursor = connection.cursor()
+
+    # Make sure user is in the database
+    cursor.execute(f"SELECT user_id FROM users WHERE user_id={user_id}")
+    if cursor.fetchone() is None:
+        bot.reply_to(message, "Cannot set price notification. You must DM the bot /start first.")
+        return
+
     coin_id = cryptos_json[coin]["cmc_id"]
-    coin_data = get_latest_price(request, coin_id)
+    coin_data = get_coin_data(coin_id)
 
     if coin_data is None:
         bot.send_message(message.chat.id, "Could not get the latest price. Try again later.")
@@ -193,17 +223,6 @@ def notify(message):
         coin_data['data'][coin_id]['quote']['USD']['price']))
 
     desired_price_movement = '+' if latest_price < price_target else '-'
-
-    user_id = message.from_user.id
-
-    connection = sqlite3.connect('notifications.db')
-    cursor = connection.cursor()
-
-    # Create new user in user db if not already present
-    cursor.execute(f"SELECT user_id FROM users WHERE user_id={user_id}")
-    if cursor.fetchone() is None:
-        cursor.execute('INSERT INTO users VALUES '
-                       f"({user_id}, '{message.from_user.first_name} {message.from_user.last_name}')")
 
     # See if user already has a notification for this coin. Overwrite the old notification if so
     cursor.execute(f"SELECT notification_id from price_notifications WHERE user_id={user_id} AND coin='{coin}'")
@@ -258,7 +277,7 @@ def price(message):
         return
 
     coin_id = cryptos_json[request]["cmc_id"]
-    coin_data = get_latest_price(request, coin_id)
+    coin_data = get_coin_data(coin_id)
 
     if coin_data is None:
         bot.send_message(message.chat.id, "Could not get the latest price. Try again later.")
@@ -276,8 +295,7 @@ def price(message):
                      f"{movement_direction} {percent_change_24h}% (24H)")
 
 
-# TODO: rename func and remove coin_name
-def get_latest_price(coin_name, coin_id):
+def get_coin_data(coin_id):
     url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest'
     headers = {
         'Accepts': 'application/json',
@@ -409,7 +427,7 @@ def check_price_notifications():
         # Only check notifications if someone has a notification set
         if coin_names is None:
             connection.close()
-            time.sleep(360)
+            time.sleep(900)
             continue
 
         coin_ids = list(map(lambda coin_name: cryptos_json[coin_name]["cmc_id"], coin_names))
@@ -417,7 +435,7 @@ def check_price_notifications():
         # Convert coin_ids list to a string so it can be passed to the CMC api
         coin_string = ",".join(coin_ids)
 
-        coin_data = get_latest_price("", coin_string)
+        coin_data = get_coin_data(coin_string)
 
         for coin_id, coin_name in zip(coin_ids, coin_names):
             current_price = float("{:.10f}".format(coin_data['data'][coin_id]['quote']['USD']['price']))
@@ -441,7 +459,7 @@ def check_price_notifications():
 
         connection.commit()
         connection.close()
-        time.sleep(360)
+        time.sleep(900)
 
 
 initialize_db()
