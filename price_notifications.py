@@ -1,6 +1,8 @@
 import sqlite3
 import time
 
+import functools
+
 import globals
 from bot_utilities import get_coin_data, usage_error, unknown_coin
 
@@ -25,8 +27,26 @@ def initialize_db():
     connection.close()
 
 
+# Wrapper that creates a cursor for notifications.db and passes it down to func
+# Closes the connection to the db and commits any changes once func returns
+def uses_notification_db(func):
+    @functools.wraps(func)
+    def wrapped(*args, **kwargs):
+        connection = sqlite3.connect('notifications.db')
+        cursor = connection.cursor()
+
+        # Call func with cursor, passing along any other args to it as well
+        func(cursor, *args, **kwargs)
+
+        connection.commit()
+        connection.close()
+
+    return wrapped
+
+
 @globals.bot.message_handler(commands=['price_notify', 'pnot'])
-def notify(message):
+@uses_notification_db
+def notify(cursor, message):
     request = message.text.split()[1:3] if len(message.text.split()) == 3 else ''
 
     if request == '':
@@ -51,9 +71,6 @@ def notify(message):
 
     user_id = message.from_user.id
 
-    connection = sqlite3.connect('notifications.db')
-    cursor = connection.cursor()
-
     # Make sure user is in the database
     cursor.execute(f"SELECT user_id FROM users WHERE user_id={user_id}")
     if cursor.fetchone() is None:
@@ -74,6 +91,7 @@ def notify(message):
 
     # See if user already has a notification for this coin. Overwrite the old notification if so
     cursor.execute(f"SELECT notification_id from price_notifications WHERE user_id={user_id} AND coin='{coin}'")
+    # If NULL is used for the notification ID, the db will replace it with a unique ID
     price_notification_id = 'NULL'
     if (fetch := cursor.fetchone()) is not None:
         price_notification_id = fetch[0]
@@ -81,24 +99,18 @@ def notify(message):
     cursor.execute('REPLACE INTO price_notifications VALUES '
                    f"({price_notification_id}, '{coin}', {user_id}, {price_target}, '{desired_price_movement}')")
 
-    connection.commit()
-    connection.close()
-
     globals.bot.reply_to(message, f"Created notification for {coin} at ${price_target}")
 
 
 @globals.bot.message_handler(commands=['check_notifications', 'cnot'])
-def check_notifications(message):
-    connection = sqlite3.connect('notifications.db')
-    cursor = connection.cursor()
-
+@uses_notification_db
+def check_notifications(cursor, message):
     cursor.execute(f"SELECT coin, notify_at FROM price_notifications WHERE user_id={message.from_user.id}")
     result = cursor.fetchall()
 
     if result == []:
         # No notifications are set
         globals.bot.reply_to(message, "No notifications set")
-        connection.close()
         return
 
     response = ""
@@ -107,7 +119,33 @@ def check_notifications(message):
         response += f"{coin} at ${notify_at}\n"
 
     globals.bot.reply_to(message, response)
-    connection.close()
+
+
+@globals.bot.message_handler(commands=['delete_notification', 'dnot'])
+@uses_notification_db
+def delete_notification(cursor, message):
+    request = message.text.split()[1:2] if len(message.text.split()) == 2 else ''
+
+    if request == '':
+        # Too many or too few args
+        usage_error(message, '/delete_notification COIN_NAME')
+        return
+
+    coin = request[0].upper()
+    if coin not in globals.cryptos_json:
+        # Given a coin name thats not in the JSON file
+        unknown_coin(message, request)
+        return
+
+    user_id = message.from_user.id
+
+    cursor.execute(f"SELECT notification_id from price_notifications WHERE user_id={user_id} AND coin='{coin}'")
+    if (cursor.fetchone() is None):
+        globals.bot.reply_to(message, f"You don't have a notification set for {coin}")
+        return
+
+    cursor.execute(f"DELETE FROM price_notifications WHERE user_id={user_id} AND coin='{coin}'")
+    globals.bot.reply_to(message, f"Notification for {coin} deleted")
 
 
 def check_price_notifications():
