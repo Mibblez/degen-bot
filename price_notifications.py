@@ -145,21 +145,21 @@ def delete_notification(cursor, message):
         return
 
     cursor.execute(f"DELETE FROM price_notifications WHERE user_id={user_id} AND coin='{coin}'")
+
     globals.bot.reply_to(message, f"Notification for {coin} deleted")
 
 
 def check_price_notifications():
-    while True:
-        connection = sqlite3.connect('notifications.db')
-        cursor = connection.cursor()
+    connection = sqlite3.connect('notifications.db')
+    cursor = connection.cursor()
 
+    while True:
         # Get a list of coins that have notifications set
         cursor.execute("SELECT DISTINCT coin FROM price_notifications")
         coin_names = [item for t in cursor.fetchall() for item in t]
 
         # Only check notifications if someone has a notification set
         if coin_names is None:
-            connection.close()
             time.sleep(900)
             continue
 
@@ -191,5 +191,4 @@ def check_price_notifications():
                     cursor.execute(f"DELETE FROM price_notifications WHERE notification_id={notification_id}")
 
         connection.commit()
-        connection.close()
         time.sleep(900)
