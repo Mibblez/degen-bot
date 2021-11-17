@@ -7,7 +7,11 @@ import random
 import time
 import re
 import sqlite3
+import shutil
+import requests
 
+from itertools import chain
+from ast import literal_eval
 from requests import Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
 
@@ -16,11 +20,30 @@ from threading import Thread
 import globals
 from bot_utilities import get_coin_data, usage_error, unknown_coin
 
+# Create necessary folders if they don't exist
+necessary_dirs = ['misc_commands/', 'media/', 'media/user_media/']
+for dir in necessary_dirs:
+    if not os.path.exists(dir):
+        os.mkdir(dir)
 
 load_dotenv()
 TELEGRAM_API_KEY = os.getenv('TELEGRAM_API_KEY')
 CMC_API_KEY = os.getenv('COINMARKETCAP_API_KEY')
 ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY')
+
+# Read ADMIN_IDS from .env and make sure it is a list of positive integers
+try:
+    ADMIN_IDS = literal_eval(os.getenv('ADMIN_IDS'))
+    for id in ADMIN_IDS:
+        if type(id) != int:
+            raise ValueError('ValueError: ADMIN_IDS contains a non-interger value')
+        elif id < 0:
+            raise ValueError('ValueError: ADMIN_IDS cannot contain negetive intergers as those are not valid IDs')
+except (ValueError, SyntaxError) as err:
+    print(err)
+    print("ADMIN_IDS .env variable missing or malformed\n"
+          "ADMIN_IDS should be formatted as a python list of integers (Ex: ADMIN_IDS = [1, 2, 3])")
+    sys.exit()
 
 if None in [TELEGRAM_API_KEY, CMC_API_KEY, ETHERSCAN_API_KEY]:
     print('ERROR: Missing API key(s)\n'
@@ -234,6 +257,63 @@ def ethgas(message):
     bot.send_message(message.chat.id, bot_message)
 
 
+@bot.message_handler(func=lambda message: re.match('/(nmc|new_media_command)', message.caption),
+                     content_types=['photo'])
+def new_media_command(message):
+    if message.from_user.id not in ADMIN_IDS:
+        bot.reply_to(message, 'Only admins can make new commands')
+        return
+
+    message_split = message.caption.split()
+
+    command_name = ''
+    command_file_name = ''
+
+    if len(message_split) == 2:
+        command_name = message_split[1]
+        command_file_name = 'misc_commands/user_commands.py'
+    elif len(message_split) == 3:
+        command_name = message_split[1]
+        command_file_name = f'misc_commands/{message_split[2]}.py'
+        if not os.path.exists(command_file_name):
+            # Don't allow users to create new files
+            return
+    else:
+        usage_error(message, "/new_media_command COMMAND_NAME COMMAND_FILE=user_commands")
+        return
+
+    if not re.match('^[^_][A-Za-z0-9_]*$', command_name):
+        bot.reply_to(message, "Command name must only contain aplhanumeric characters and underscores "
+                              "and cannot start with an underscore")
+        return
+
+    # Make sure no file with the same name exists in the media folder
+    for file_path in chain(os.scandir('media/'), os.scandir('media/user_media/')):
+        if os.path.splitext(os.path.basename(file_path))[0].lower() == command_name.lower():
+            bot.send_message(message.chat.id, f'Cannot create /{command_name}. Command already exists')
+            return
+
+    # Get attached file
+    file_info = bot.get_file(message.photo[1].file_id)
+    file = requests.get('https://api.telegram.org/file/bot{0}/{1}'.
+                        format(TELEGRAM_API_KEY, file_info.file_path), stream=True)
+
+    # Save attached file to disk
+    with open(f'media/user_media/{command_name}.jpg', 'wb') as f:
+        shutil.copyfileobj(file.raw, f)
+
+    command_str = f"\n\n@bot.message_handler(commands=['{command_name}'])\n" +\
+                  f"def uc_{command_name}(message):\n" +\
+                  f"    bot.send_photo(message.chat.id, open('media/user_media/{command_name}.jpg', 'rb'))\n"
+
+    # Append command to command file
+    with open(command_file_name, 'a+') as command_file:
+        command_file.write(command_str)
+
+    # Feed command_str to the interpreter so that the command is available right away
+    exec(command_str)
+
+
 @bot.message_handler(commands=['list_commands', 'lc'])
 def list_commands_in_file(message, dir='misc_commands'):
     if not os.path.exists(dir):
@@ -265,10 +345,9 @@ def list_commands_in_file(message, dir='misc_commands'):
     bot.send_message(message.chat.id, f"Known commands in {request}:\n{commands}")
 
 
-if os.path.exists('misc_commands'):
-    # Load bot commands from each python file in misc_commands directory
-    for command_file in filter(lambda file: file.endswith('.py'), os.listdir('misc_commands')):
-        exec(open(f"misc_commands/{command_file}").read())
+# Load bot commands from each python file in misc_commands directory
+for command_file in filter(lambda file: file.endswith('.py'), os.listdir('misc_commands')):
+    exec(open(f"misc_commands/{command_file}").read())
 
 
 def message_polling():
@@ -289,5 +368,5 @@ price_notifications.initialize_db()
 telegram_polling_thread = Thread(target=message_polling)
 telegram_polling_thread.start()
 
-price_checker_thread = Thread(target=price_notifications.check_price_notifications)
-price_checker_thread.start()
+#price_checker_thread = Thread(target=price_notifications.check_price_notifications)
+#price_checker_thread.start()
