@@ -257,7 +257,7 @@ def ethgas(message):
     bot.send_message(message.chat.id, bot_message)
 
 
-@bot.message_handler(func=lambda message: re.match('/(nmc|new_media_command)', message.caption),
+@bot.message_handler(func=lambda message: re.match('^/(nmc|new_media_command)$', message.caption.split()[0]),
                      content_types=['photo'])
 def new_media_command(message):
     if message.from_user.id not in ADMIN_IDS:
@@ -294,7 +294,7 @@ def new_media_command(message):
             return
 
     # Get attached file
-    file_info = bot.get_file(message.photo[1].file_id)
+    file_info = bot.get_file(message.photo[-1].file_id)
     file = requests.get('https://api.telegram.org/file/bot{0}/{1}'.
                         format(TELEGRAM_API_KEY, file_info.file_path), stream=True)
 
