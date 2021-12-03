@@ -481,5 +481,5 @@ price_notifications.initialize_db()
 telegram_polling_thread = Thread(target=message_polling)
 telegram_polling_thread.start()
 
-#price_checker_thread = Thread(target=price_notifications.check_price_notifications)
-#price_checker_thread.start()
+price_checker_thread = Thread(target=price_notifications.check_price_notifications)
+price_checker_thread.start()
