@@ -1,4 +1,5 @@
 import os
+import pprint
 import sys
 from dotenv import load_dotenv
 import telebot
@@ -67,6 +68,7 @@ import price_notifications
 
 user_states = {}
 new_crypto_tmp = {}
+additional_command_info = {}
 
 
 @bot.message_handler(commands=['coins'])
@@ -365,7 +367,7 @@ def handle_new_crypto(message):
     starting_command = (message.text.split()[0] == '/new_crypto') and \
                        (not user_states.get(user_id, '').startswith('new_crypto'))
 
-    if starting_command:
+    if starting_command and user_id in ADMIN_IDS:
         user_states[user_id] = 'new_crypto-0'
         return True
 
@@ -375,9 +377,6 @@ def handle_new_crypto(message):
 @bot.message_handler(func=handle_new_crypto)
 def new_crypto(message):
     user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
-        bot.reply_to(message, 'Only admins can add new coins')
-        return
 
     command_state = int(user_states[user_id].split('-')[1])
 
@@ -387,7 +386,7 @@ def new_crypto(message):
 
         # Too many or too few args
         if contract_address == '':
-            usage_error(message, '/new_crypto COIN_NAME')
+            usage_error(message, '/new_crypto CONTRACT_ADDRESS')
             return
 
         response = get_coin_info(contract_address, CMC_API_KEY)
@@ -460,6 +459,132 @@ def new_crypto(message):
         else:
             bot.reply_to(message, 'Aborting command.')
 
+        del user_states[user_id]
+        del new_crypto_tmp[user_id]
+
+
+def handle_update_crypto(message):
+    user_id = message.from_user.id
+
+    if user_states.get(user_id, '').startswith('update_crypto'):
+        return True
+
+    # See if the user is starting this command
+    starting_command = (message.text.split()[0] == '/update_crypto') and \
+                       (not user_states.get(user_id, '').startswith('update_crypto'))
+
+    if starting_command and user_id in ADMIN_IDS:
+        user_states[user_id] = 'update_crypto-0'
+        return True
+
+    return False
+
+
+@bot.message_handler(func=handle_update_crypto)
+def update_crypto(message):
+    user_id = message.from_user.id
+
+    command_state = int(user_states[user_id].split('-')[1])
+
+    # TODO: switch here too
+    if command_state == 0:
+        coin_symbol = (message.text.split()[1] if len(message.text.split()) == 2 else '').upper()
+
+        if coin_symbol == '':
+            usage_error(message, "/update_crypto COIN_SYMBOL")
+            return
+
+        if coin_symbol not in cryptos_json:
+            bot.reply_to(message, f"Cannot update coin: unknown coin {coin_symbol}")
+            return
+
+        new_crypto_tmp[user_id] = [coin_symbol, cryptos_json[coin_symbol]]
+
+        reply = f'--- {coin_symbol} Info ---\n'
+        index = 0
+        for k, v in cryptos_json[coin_symbol]["INFO"].items():
+            reply += f"[{index}] - {k}: {v}\n"
+            index += 1
+
+        reply += f"Enter the index of the entry you want to change or enter {index} to add a new entry.\n" +\
+                 "Enter anything else to abort."
+        user_states[user_id] = 'update_crypto-1'
+
+        bot.reply_to(message, reply)
+    elif command_state == 1:
+        answer = (message.text if len(message.text.split()) == 1 else '')
+
+        current_entries_len = len(new_crypto_tmp[user_id][1]["INFO"])
+
+        if (not answer.isdigit()) or (int(answer) < 0) or (int(answer) > current_entries_len):
+            del user_states[user_id]
+            del new_crypto_tmp[user_id]
+            bot.reply_to(message, 'Aborting command.')
+            return
+
+        answer = int(answer)
+
+        if current_entries_len == answer:
+            # User is making a new entry
+            bot.send_message(message.chat.id, "Enter a name for the new entry or enter ABORT to cancel.")
+            user_states[user_id] = 'update_crypto-2'
+        else:
+            # User is updating an existing entry
+            value_to_change = list(new_crypto_tmp[user_id][1]["INFO"].keys())[answer]
+            bot.send_message(message.chat.id, f"Enter a new value for {value_to_change} or enter ABORT to cancel.")
+            additional_command_info[user_id] = value_to_change
+            user_states[user_id] = 'update_crypto-3'
+    elif command_state == 2:
+        answer = (message.text if message.text is not None else '')
+
+        if (answer == '') or (answer.upper() == 'ABORT'):
+            del new_crypto_tmp[user_id]
+            del user_states[user_id]
+            bot.reply_to(message, 'Aborting command.')
+            return
+
+        additional_command_info[user_id] = answer
+        bot.send_message(message.chat.id, f"Enter a value for {answer}.")
+        user_states[user_id] = 'update_crypto-3'
+    elif command_state == 3:
+        answer = (message.text if message.text is not None else '')
+
+        if answer == '' or (answer.upper() == 'ABORT'):
+            del additional_command_info[user_id]
+            del new_crypto_tmp[user_id]
+            del user_states[user_id]
+            bot.reply_to(message, 'Aborting command.')
+            return
+
+        new_crypto_tmp[user_id][1]['INFO'][additional_command_info[user_id]] = answer
+
+        coin_symbol = new_crypto_tmp[user_id][0]
+        index = 0
+        reply = f'--- {coin_symbol} Updated Info ---\n'
+        for k, v in cryptos_json[coin_symbol]["INFO"].items():
+            reply += f"[{index}] - {k}: {v}\n"
+            index += 1
+        reply += "\n Is this information correct? (y/n)"
+
+        bot.send_message(message.chat.id, reply)
+
+        user_states[user_id] = 'update_crypto-4'
+    elif command_state == 4:
+        answer = (message.text if len(message.text.split()) == 1 else '').upper()
+
+        if answer == 'Y':
+            cryptos_json[new_crypto_tmp[user_id][0]] = new_crypto_tmp[user_id][1]
+
+            # Dump cryptos_json to disk
+            with open('cryptos.json', 'w') as f:
+                json.dump(cryptos_json, f, indent=4)
+
+            bot.reply_to(message, 'Coin successfully updated')
+        else:
+            bot.reply_to(message, 'Aborting command.')
+
+        del additional_command_info[user_id]
+        del new_crypto_tmp[user_id]
         del user_states[user_id]
 
 
