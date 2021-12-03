@@ -18,7 +18,7 @@ from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
 from threading import Thread
 
 import globals
-from bot_utilities import get_coin_data, usage_error, unknown_coin
+from bot_utilities import get_coin_data, usage_error, unknown_coin, get_coin_info
 
 # Create necessary folders if they don't exist
 necessary_dirs = ['misc_commands/', 'media/', 'media/user_media/']
@@ -64,6 +64,9 @@ bot = telebot.TeleBot(TELEGRAM_API_KEY)
 # Have to initilize globals before importing files that have telebot decorators
 globals.initilize(bot, cryptos_json, CMC_API_KEY)
 import price_notifications
+
+user_states = {}
+new_crypto_tmp = {}
 
 
 @bot.message_handler(commands=['coins'])
@@ -313,6 +316,8 @@ def new_media_command(message):
     # Feed command_str to the interpreter so that the command is available right away
     exec(command_str)
 
+    bot.reply_to(message, f"New command created: /{command_name}")
+
 
 @bot.message_handler(commands=['list_commands', 'lc'])
 def list_commands_in_file(message, dir='misc_commands'):
@@ -350,6 +355,114 @@ for command_file in filter(lambda file: file.endswith('.py'), os.listdir('misc_c
     exec(open(f"misc_commands/{command_file}").read())
 
 
+def handle_new_crypto(message):
+    user_id = message.from_user.id
+
+    if user_states.get(user_id, '').startswith('new_crypto'):
+        return True
+
+    # See if the user is starting this command
+    starting_command = (message.text.split()[0] == '/new_crypto') and \
+                       (not user_states.get(user_id, '').startswith('new_crypto'))
+
+    if starting_command:
+        user_states[user_id] = 'new_crypto-0'
+        return True
+
+    return False
+
+
+@bot.message_handler(func=handle_new_crypto)
+def new_crypto(message):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, 'Only admins can add new coins')
+        return
+
+    command_state = int(user_states[user_id].split('-')[1])
+
+    # TODO: convert to a switch when python 3.10 comes out
+    if command_state == 0:
+        contract_address = (message.text.split()[1] if len(message.text.split()) == 2 else '')
+
+        # Too many or too few args
+        if contract_address == '':
+            usage_error(message, '/new_crypto COIN_NAME')
+            return
+
+        response = get_coin_info(contract_address, CMC_API_KEY)
+
+        # Make sure a coin with the given contract ID is found
+        error_message = response['status']['error_message']
+        if error_message is not None:
+            bot.reply_to(message, f'Could not add coin: {error_message}')
+            del user_states[user_id]
+            return
+
+        data = response['data']
+
+        coin_id = list(data.keys())[0]
+        coin_data = data[coin_id]
+        coin_symbol = coin_data['symbol']
+
+        # Make sure the coin isn't already in cryptos_json
+        for known_coin in cryptos_json:
+            if known_coin == coin_symbol:
+                bot.reply_to(message, f'Cannot add coin. {coin_symbol} is already known by the bot.')
+                del user_states[user_id]
+                return
+
+        coin_name = coin_data['name']
+        website = coin_data['urls']['website'][0]
+        platform = coin_data['platform']['symbol']
+
+        # TODO: switch here too
+        if platform == 'ETH':
+            platform = 'ETH ERC-20'
+        elif platform == 'BNB':
+            platform = 'BNB BEP20'
+
+        cryptos_json_tmp = {coin_symbol: {
+                                "INFO": {
+                                    "contract_id": contract_address,
+                                    "chain": platform,
+                                    "website": website
+                                },
+                                "cmc_id": coin_id,
+                                "cmc_name": coin_name},
+                            }
+
+        new_crypto_tmp[user_id] = cryptos_json_tmp
+
+        user_states[user_id] = 'new_crypto-1'
+
+        # Prompt the user to confirm the coin's info
+        bot_message = (f"{contract_address}\n"
+                       f"Name: {coin_name}\n"
+                       f"Symbol: {coin_symbol}\n"
+                       f"Chain: {platform}\n\n"
+                       "Is this correct? (y/n)"
+                       )
+        bot.send_message(message.chat.id, bot_message)
+    elif command_state == 1:
+        answer = (message.text if len(message.text.split()) == 1 else '').upper()
+
+        if answer == 'Y':
+            # Add the new coin to the cryptos_json dict so that it is usable immediately
+            cryptos_json.update(new_crypto_tmp[user_id])
+
+            # Dump cryptos_json to disk
+            with open('cryptos.json', 'r+') as f:
+                f.seek(0)
+                json.dump(cryptos_json, f, indent=4)
+
+            bot.reply_to(message, 'Success. The new coin has been added to the bot.')
+        else:
+            bot.reply_to(message, 'Aborting command.')
+
+        del user_states[user_id]
+
+
 def message_polling():
     print('Starting...')
     while True:
@@ -368,5 +481,5 @@ price_notifications.initialize_db()
 telegram_polling_thread = Thread(target=message_polling)
 telegram_polling_thread.start()
 
-price_checker_thread = Thread(target=price_notifications.check_price_notifications)
-price_checker_thread.start()
+#price_checker_thread = Thread(target=price_notifications.check_price_notifications)
+#price_checker_thread.start()
