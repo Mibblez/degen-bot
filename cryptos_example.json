@@ -1,10 +1,18 @@
 {
-    "SHIB": {
-        "INFO" : {
-            "contract_id": "0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce",
-            "chain": "ETH ERC-20",
-            "website": "https://shibatoken.com/"
+    "BNB": {
+        "INFO": {
+            "website": "https://www.binance.com/"
         },
-        "cmc_id": "5994"
+        "cmc_id": "1839",
+        "cmc_name": "Binance Coin"
+    },
+    "SAND": {
+        "INFO": {
+            "contract_id": "0x3845badAde8e6dFF049820680d1F14bD3903a5d0",
+            "chain": "ETH ERC-20",
+            "website": "https://www.sandbox.game/en/"
+        },
+        "cmc_id": "6210",
+        "cmc_name": "The Sandbox"
     }
 }
