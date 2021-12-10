@@ -1,5 +1,4 @@
 import os
-import pprint
 import sys
 from dotenv import load_dotenv
 import telebot
@@ -19,7 +18,7 @@ from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
 from threading import Thread
 
 import globals
-from bot_utilities import get_coin_data, usage_error, unknown_coin, get_coin_info
+from bot_utilities import get_coin_data, usage_error, unknown_coin, get_coin_info, log_to_disk
 
 # Create necessary folders if they don't exist
 necessary_dirs = ['misc_commands/', 'media/', 'media/user_media/']
@@ -320,6 +319,8 @@ def new_media_command(message):
 
     bot.reply_to(message, f"New command created: /{command_name}")
 
+    log_to_disk(f'Added new media command /{command_name}', '/new_media_command', message)
+
 
 @bot.message_handler(commands=['list_commands', 'lc'])
 def list_commands_in_file(message, dir='misc_commands'):
@@ -456,6 +457,7 @@ def new_crypto(message):
                 json.dump(cryptos_json, f, indent=4)
 
             bot.reply_to(message, 'Success. The new coin has been added to the bot.')
+            log_to_disk(f'Added {list(new_crypto_tmp[user_id].keys())[0]} to the bot', '/new_crypto', message)
         else:
             bot.reply_to(message, 'Aborting command.')
 
@@ -580,6 +582,7 @@ def update_crypto(message):
                 json.dump(cryptos_json, f, indent=4)
 
             bot.reply_to(message, 'Coin successfully updated')
+            log_to_disk(f'Updated {new_crypto_tmp[user_id][0]}', '/update_crypto', message)
         else:
             bot.reply_to(message, 'Aborting command.')
 

@@ -1,4 +1,8 @@
-global bot, cryptos_json, CMC_API_KEY
+from threading import Lock
+
+global bot, cryptos_json, CMC_API_KEY, log_lock
+
+log_lock = Lock()
 
 
 def initilize(telebot, cryptos_json_other, cmc_api_key):
