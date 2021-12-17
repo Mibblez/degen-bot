@@ -7,6 +7,21 @@ from datetime import datetime
 import globals
 
 
+class UserState:
+    def __init__(self, current_command: str) -> None:
+        self.__current_command = current_command
+        self.state = 0
+        self.new_crypto_tmp = None
+        self.additional_info = None
+
+    def __repr__(self) -> str:
+        return f"{self.__current_command}-{self.state}"
+
+    @property
+    def current_command(self):
+        return self.__current_command
+
+
 def usage_error(message, usage_str: str = ''):
     globals.bot.send_message(message.chat.id, f'Usage\n{usage_str}')
 
