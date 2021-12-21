@@ -1,3 +1,4 @@
+from __future__ import unicode_literals
 import os
 import sys
 from dotenv import load_dotenv
@@ -17,10 +18,11 @@ from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
 
 from threading import Thread
 
-from telebot.types import User
+import youtube_dl
 
 import globals
-from bot_utilities import get_coin_data, usage_error, unknown_coin, get_coin_info, log_to_disk, UserState
+from bot_utilities import get_coin_data, usage_error, unknown_coin, get_coin_info, log_to_disk
+from bot_utilities import UserState, TwitterVideoLogger
 
 # Create necessary folders if they don't exist
 necessary_dirs = ['misc_commands/', 'media/', 'media/user_media/']
@@ -213,7 +215,7 @@ def price(message):
 
     movement_direction = '⬆️' if percent_change_24h > 0.0 else '⬇️'
 
-    bot.send_message(message.chat.id, f"{request} Price: ${latest_price}\n" +
+    bot.send_message(message.chat.id, f"{request} Price: ${latest_price}\n"
                      f"{movement_direction} {percent_change_24h}% (24H)")
 
 
@@ -312,16 +314,83 @@ def new_media_command(message):
                   f"def uc_{command_name}(message):\n" +\
                   f"    bot.send_photo(message.chat.id, open('media/user_media/{command_name}.jpg', 'rb'))\n"
 
+    # Feed command_str to the interpreter so that the command is available right away
+    exec(command_str)
+
     # Append command to command file
     with open(command_file_name, 'a+') as command_file:
         command_file.write(command_str)
 
-    # Feed command_str to the interpreter so that the command is available right away
-    exec(command_str)
-
     bot.reply_to(message, f"New command created: /{command_name}")
 
     log_to_disk(f'Added new media command /{command_name}', '/new_media_command', message)
+
+
+@bot.message_handler(commands=['new_twitter_video_command', 'ntv'])
+def new_media_command_twitter_video(message):
+    if message.from_user.id not in ADMIN_IDS:
+        bot.reply_to(message, 'Only admins can make new commands')
+        return
+
+    message_split = message.text.split()
+
+    if len(message_split) != 3:
+        usage_error(message, "/new_twitter_video_command COMMAND_NAME TWITTER_VIDEO_URL")
+        return
+
+    command_name = message_split[1]
+    twitter_vid_url = message_split[2]
+
+    if not re.match('^http[s]?://twitter.com/i/status/[0-9]+$', twitter_vid_url):
+        bot.reply_to(message, "Invalid URL. Get the URL for the video my right clicking it"
+                              "and clicking 'Copy Video Address'")
+        return
+
+    if not re.match('^[^_][A-Za-z0-9_]*$', command_name):
+        bot.reply_to(message, "Command name must only contain aplhanumeric characters and underscores "
+                              "and cannot start with an underscore")
+        return
+
+    # Make sure no command with the same name exists in the media folder
+    for file_path in chain(os.scandir('media/'), os.scandir('media/user_media/')):
+        if os.path.splitext(os.path.basename(file_path))[0].lower() == command_name.lower():
+            bot.send_message(message.chat.id, f'Cannot create /{command_name}. Command already exists')
+            return
+
+    ydl_opts = {'outtmpl': f"media/user_media/{command_name}" + ".%(ext)s",
+                'logger': TwitterVideoLogger(),
+                'progress_hooks': [twitter_download_hook]
+                }
+
+    try:
+        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([twitter_vid_url])
+    except youtube_dl.utils.DownloadError:
+        bot.reply_to(message, "Could not download video. Maybe the provided URL is invalid?")
+        return
+
+    bot.reply_to(message, f"New command created: /{command_name}")
+
+    log_to_disk(f'Added new twitter video command /{command_name}', '/new_twitter_video_command', message)
+
+
+def twitter_download_hook(d):
+    if d['status'] == 'finished':
+        file_name = os.path.basename(d['filename'])
+        command_name, file_extension = os.path.splitext(file_name)
+
+        if file_extension != '.mp4':
+            raise youtube_dl.utils.DownloadError("Invalid file extension")
+
+        command_str = f"\n\n@bot.message_handler(commands=['{command_name}'])\n" +\
+                      f"def uc_{command_name}(message):\n" +\
+                      f"    bot.send_video(message.chat.id, open('media/user_media/{file_name}', 'rb'))\n"
+
+        exec(command_str)
+
+        # Append command to command file
+        with open('misc_commands/user_commands.py', 'a+') as command_file:
+            command_file.write(command_str)
 
 
 @bot.message_handler(commands=['list_commands', 'lc'])
@@ -487,8 +556,6 @@ def update_crypto(message):
     user_id = message.from_user.id
 
     command_state = user_states[user_id].state
-
-    print(user_states[user_id])
 
     # TODO: switch here too
     if command_state == 0:

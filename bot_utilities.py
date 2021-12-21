@@ -22,6 +22,17 @@ class UserState:
         return self.__current_command
 
 
+class TwitterVideoLogger(object):
+    def debug(self, msg):
+        pass
+
+    def warning(self, msg):
+        pass
+
+    def error(self, msg):
+        pass
+
+
 def usage_error(message, usage_str: str = ''):
     globals.bot.send_message(message.chat.id, f'Usage\n{usage_str}')
 
