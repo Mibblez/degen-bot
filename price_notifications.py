@@ -71,7 +71,7 @@ def at_everyone_opt_in(cursor, message):
     else:
         # A db entry does not exist for this group chat. Create one
         cursor.execute('INSERT INTO at_everyone_notifications VALUES '
-                       f'({chat_id}, {message.from_user.first_name}|{message.from_user.id})')
+                       f"({chat_id}, '{message.from_user.first_name}|{message.from_user.id}')")
 
     globals.bot.reply_to(message, "You will now be notified when someone uses the /everyone command")
 
