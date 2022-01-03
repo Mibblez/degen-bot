@@ -20,8 +20,12 @@ def initialize_db():
                'notify_at FLOAT, direction CHAR,' +\
                'FOREIGN KEY(user_id) REFERENCES users(user_id))'
 
+    command3 = 'CREATE TABLE IF NOT EXISTS ' +\
+               'at_everyone_notifications(group_chat_id INTEGER PRIMARY KEY, to_notify TEXT)'
+
     cursor.execute(command1)
     cursor.execute(command2)
+    cursor.execute(command3)
 
     connection.commit()
     connection.close()
@@ -42,6 +46,55 @@ def uses_notification_db(func):
         connection.close()
 
     return wrapped
+
+
+@globals.bot.message_handler(commands=['notify_me'])
+@uses_notification_db
+def at_everyone_opt_in(cursor, message):
+    if message.chat.type == 'private':
+        return
+
+    chat_id = message.chat.id
+
+    cursor.execute(f'SELECT to_notify FROM at_everyone_notifications WHERE group_chat_id={chat_id}')
+    if (result := cursor.fetchone()) is not None:
+        user_ids = result[0]
+
+        if str(message.from_user.id) in user_ids:
+            globals.bot.reply_to(message, "You're already recieving @everyone notifiactions")
+            return
+
+        # Append the user's first name and ID to the group's notification entry
+        user_ids += f';{message.from_user.first_name}|{message.from_user.id}'
+        cursor.execute("UPDATE at_everyone_notifications "
+                       f"SET to_notify = '{user_ids}' WHERE group_chat_id = '{chat_id}'")
+    else:
+        # A db entry does not exist for this group chat. Create one
+        cursor.execute('INSERT INTO at_everyone_notifications VALUES '
+                       f'({chat_id}, {message.from_user.first_name}|{message.from_user.id})')
+
+    globals.bot.reply_to(message, "You will now be notified when someone uses the /everyone command")
+
+
+@globals.bot.message_handler(commands=["dont_notify_me"])
+@uses_notification_db
+def at_everyone_opt_out(cursor, message):
+    if message.chat.type == 'private':
+        return
+
+    chat_id = message.chat.id
+
+    cursor.execute(f'SELECT to_notify FROM at_everyone_notifications WHERE group_chat_id={chat_id}')
+    if (result := cursor.fetchone()) is not None:
+        user_ids = result[0]
+
+        if str(message.from_user.id) in user_ids:
+            # Remove the user's first name and ID from the group's notification entry
+            user_ids_new = ';'.join(list(filter(lambda x: str(message.from_user.id) not in x, user_ids.split(';'))))
+            cursor.execute("UPDATE at_everyone_notifications "
+                           f"SET to_notify = '{user_ids_new}' WHERE group_chat_id = '{chat_id}'")
+
+    globals.bot.reply_to(message, "You won't be notified when someone uses the /everyone command")
 
 
 @globals.bot.message_handler(commands=['price_notify', 'pnot'])

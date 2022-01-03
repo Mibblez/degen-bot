@@ -68,6 +68,7 @@ bot = telebot.TeleBot(TELEGRAM_API_KEY)
 # Have to initilize globals before importing files that have telebot decorators
 globals.initilize(bot, cryptos_json, CMC_API_KEY)
 import price_notifications
+from price_notifications import uses_notification_db
 
 user_states = {}
 # new_crypto_tmp = {}
@@ -458,6 +459,7 @@ def new_crypto(message):
         # Too many or too few args
         if contract_address == '':
             usage_error(message, '/new_crypto CONTRACT_ADDRESS')
+            del user_states[user_id]
             return
 
         response = get_coin_info(contract_address, CMC_API_KEY)
@@ -563,6 +565,7 @@ def update_crypto(message):
 
         if coin_symbol == '':
             usage_error(message, "/update_crypto COIN_SYMBOL")
+            del user_states[user_id]
             return
 
         if coin_symbol not in cryptos_json:
@@ -652,6 +655,37 @@ def update_crypto(message):
             bot.reply_to(message, 'Aborting command.')
 
         del user_states[user_id]
+
+
+def handle_at_everyone(message):
+    if message.from_user.id not in ADMIN_IDS \
+       or not message.text.startswith('/everyone ') \
+       or message.chat.type == "private":
+        return False
+
+    return True
+
+
+@bot.message_handler(func=handle_at_everyone)
+@uses_notification_db
+def at_everyone(cursor, message):
+    chat_id = message.chat.id
+
+    # Get the first name and user ID for all users in this group who are registered for /everyone notifications
+    cursor.execute(f'SELECT to_notify FROM at_everyone_notifications WHERE group_chat_id={chat_id}')
+
+    if (result := cursor.fetchone()) is not None:
+        # User entries are split up by semicolons
+        user_entries = result[0].split(';')
+
+        response = ''
+        for user_entry in user_entries:
+            # First name and user ID are seperated by a |
+            first_name, user_id = user_entry.split('|')
+
+            response += f'[{first_name}](tg://user?id={user_id}) '
+
+        bot.reply_to(message, response, parse_mode='Markdown')
 
 
 def message_polling():
