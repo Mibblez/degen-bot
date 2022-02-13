@@ -83,15 +83,46 @@ def get_coin_data(coin_id, cmc_api_key):
         return None
 
 
-def get_coin_info(contract_address, cmc_api_key):
+#FIXME: Make contract_address and id optional args
+def get_coin_info(contract_address, cmc_api_key, id=None):
     url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/info'
     headers = {
         'Accepts': 'application/json',
         'X-CMC_PRO_API_KEY': cmc_api_key,
     }
 
+    if id is None:
+        parameters = {
+            'address': contract_address
+        }
+    else:
+        parameters = {
+            'id': id
+        }
+
+    session = Session()
+    session.headers.update(headers)
+
+    try:
+        response = session.get(url, params=parameters)
+        data = json.loads(response.text)
+        return data
+    except (ConnectionError, Timeout, TooManyRedirects) as e:
+        data = json.loads(response.text)
+        pp.pprint(data)
+        print(e)
+        return None
+
+
+def cmc_id_map(symbol, cmc_api_key):
+    url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/map'
+    headers = {
+        'Accepts': 'application/json',
+        'X-CMC_PRO_API_KEY': cmc_api_key,
+    }
+
     parameters = {
-        'address': contract_address
+        'symbol': symbol,
     }
 
     session = Session()

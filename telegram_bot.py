@@ -1,6 +1,9 @@
 from __future__ import unicode_literals
 import os
+import pprint as pp
 import sys
+from tkinter import N
+from tkinter.messagebox import NO
 from dotenv import load_dotenv
 import telebot
 import json
@@ -21,7 +24,7 @@ from threading import Thread
 import youtube_dl
 
 import globals
-from bot_utilities import get_coin_data, usage_error, unknown_coin, get_coin_info, log_to_disk
+from bot_utilities import cmc_id_map, get_coin_data, usage_error, unknown_coin, get_coin_info, log_to_disk
 from bot_utilities import UserState, TwitterVideoLogger
 
 # Create necessary folders if they don't exist
@@ -454,17 +457,32 @@ def new_crypto(message):
 
     # TODO: convert to a switch when python 3.10 comes out
     if command_state == 0:
-        contract_address = (message.text.split()[1] if len(message.text.split()) == 2 else '')
+        crypto_to_add = (message.text.split()[1] if len(message.text.split()) == 2 else '')
 
         # Too many or too few args
-        if contract_address == '':
+        if crypto_to_add == '':
             usage_error(message, '/new_crypto CONTRACT_ADDRESS')
             del user_states[user_id]
             return
 
-        response = get_coin_info(contract_address, CMC_API_KEY)
+        if crypto_to_add.startswith('0x'):
+            # Given a contract address
+            response = get_coin_info(crypto_to_add, CMC_API_KEY)
+        else:
+            # Given a crypto symbol
+            response = cmc_id_map(crypto_to_add, CMC_API_KEY)
+            if (response['status']['error_message'] is None) and (len(response['data']) == 1):
+                # Only got one crypto. Can get its info right away
+                response = get_coin_info(None, CMC_API_KEY, id=int(response['data'][0]['id']))
+            else:
+                bot_message = (f"Cannot add {crypto_to_add}, "
+                               "found multiple cryptocurrencies matching the provided symbol.\n"
+                               "Use a contract ID to add this coin.")
+                bot.send_message(message.chat.id, bot_message)
+                del user_states[user_id]
+                return
 
-        # Make sure a coin with the given contract ID is found
+        # Make sure a cryptocurrency matching the provided contract id or symbol is found
         error_message = response['status']['error_message']
         if error_message is not None:
             bot.reply_to(message, f'Could not add coin: {error_message}')
@@ -473,48 +491,65 @@ def new_crypto(message):
 
         data = response['data']
 
-        coin_id = list(data.keys())[0]
-        coin_data = data[coin_id]
-        coin_symbol = coin_data['symbol']
+        if len(data) == 1:
+            coin_id = list(data.keys())[0]
+            coin_data = data[coin_id]
+            coin_symbol = coin_data['symbol']
 
-        # Make sure the coin isn't already in cryptos_json
-        for known_coin in cryptos_json:
-            if known_coin == coin_symbol:
-                bot.reply_to(message, f'Cannot add coin. {coin_symbol} is already known by the bot.')
-                del user_states[user_id]
-                return
+            # Make sure the coin isn't already in cryptos_json
+            for known_coin in cryptos_json:
+                if known_coin == coin_symbol:
+                    bot.reply_to(message, f'Cannot add coin. {coin_symbol} is already known by the bot.')
+                    del user_states[user_id]
+                    return
 
-        coin_name = coin_data['name']
-        website = coin_data['urls']['website'][0]
-        platform = coin_data['platform']['symbol']
+            coin_name = coin_data['name']
+            website = coin_data['urls']['website'][0]
+            if coin_data['platform'] is not None:
+                platform = coin_data['platform']['symbol']
+                contract_id = coin_data['platform']['token_address']
+            else:
+                platform = contract_id = None
 
-        # TODO: switch here too
-        if platform == 'ETH':
-            platform = 'ETH ERC-20'
-        elif platform == 'BNB':
-            platform = 'BNB BEP20'
+            if platform == 'ETH':
+                platform = 'ETH ERC-20'
+            elif platform == 'BNB':
+                platform = 'BNB BEP20'
 
-        cryptos_json_tmp = {coin_symbol: {
-                                "INFO": {
-                                    "contract_id": contract_address,
-                                    "chain": platform,
-                                    "website": website
-                                },
-                                "cmc_id": coin_id,
-                                "cmc_name": coin_name},
-                            }
+            cryptos_json_tmp = {coin_symbol: {
+                                    "INFO": {
+                                        "contract_id": contract_id,
+                                        "chain": platform,
+                                        "website": website
+                                    },
+                                    "cmc_id": coin_id,
+                                    "cmc_name": coin_name},
+                                }
 
-        user_states[user_id].new_crypto_tmp = cryptos_json_tmp
-        user_states[user_id].state = 1
+            user_states[user_id].new_crypto_tmp = cryptos_json_tmp
+            user_states[user_id].state = 1
 
-        # Prompt the user to confirm the coin's info
-        bot_message = (f"{contract_address}\n"
-                       f"Name: {coin_name}\n"
-                       f"Symbol: {coin_symbol}\n"
-                       f"Chain: {platform}\n\n"
-                       "Is this correct? (y/n)"
-                       )
-        bot.send_message(message.chat.id, bot_message)
+            # Prompt the user to confirm the coin's info
+            bot_message = (f"-- {contract_id if contract_id else (coin_name)} --\n"
+                           f"Name: {coin_name}\n"
+                           f"Symbol: {coin_symbol}\n"
+                           f"Chain: {platform}\n\n"
+                           "Is this correct? (y/n)"
+                           )
+            bot.send_message(message.chat.id, bot_message)
+        else:
+            # Got multiple cryptos, have to make the user pick one
+            bot_message = ""
+            for crypto in data:
+                bot_message += (f"-- {crypto['symbol']} --\n"
+                                f"Slug: {crypto['name']}\n")
+                if platform := crypto['platform']:
+                    bot_message += (f"Contract Address: {platform['token_address']}\n"
+                                    f"Chain: {platform['symbol']}\n")
+                bot_message += '\n'
+
+            bot.send_message(message.chat.id, bot_message)
+
     elif command_state == 1:
         answer = (message.text if len(message.text.split()) == 1 else '').upper()
 
@@ -706,5 +741,5 @@ price_notifications.initialize_db()
 telegram_polling_thread = Thread(target=message_polling)
 telegram_polling_thread.start()
 
-price_checker_thread = Thread(target=price_notifications.check_price_notifications)
-price_checker_thread.start()
+# price_checker_thread = Thread(target=price_notifications.check_price_notifications)
+# price_checker_thread.start()
