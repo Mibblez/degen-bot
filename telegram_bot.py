@@ -2,8 +2,6 @@ from __future__ import unicode_literals
 import os
 import pprint as pp
 import sys
-from tkinter import N
-from tkinter.messagebox import NO
 from dotenv import load_dotenv
 import telebot
 import json
@@ -455,13 +453,12 @@ def new_crypto(message):
     user_id = message.from_user.id
     command_state = user_states[user_id].state
 
-    # TODO: convert to a switch when python 3.10 comes out
     if command_state == 0:
         crypto_to_add = (message.text.split()[1] if len(message.text.split()) == 2 else '')
 
         # Too many or too few args
         if crypto_to_add == '':
-            usage_error(message, '/new_crypto CONTRACT_ADDRESS')
+            usage_error(message, '/new_crypto [CONTRACT_ADDRESS|SYMBOL]')
             del user_states[user_id]
             return
 
@@ -594,7 +591,6 @@ def update_crypto(message):
 
     command_state = user_states[user_id].state
 
-    # TODO: switch here too
     if command_state == 0:
         coin_symbol = (message.text.split()[1] if len(message.text.split()) == 2 else '').upper()
 
@@ -741,5 +737,5 @@ price_notifications.initialize_db()
 telegram_polling_thread = Thread(target=message_polling)
 telegram_polling_thread.start()
 
-# price_checker_thread = Thread(target=price_notifications.check_price_notifications)
-# price_checker_thread.start()
+price_checker_thread = Thread(target=price_notifications.check_price_notifications)
+price_checker_thread.start()
